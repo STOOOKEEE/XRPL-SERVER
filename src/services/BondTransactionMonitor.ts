@@ -273,7 +273,7 @@ export class BondTransactionMonitor {
           totalSupply: totalSupply ? String(totalSupply) : '0',
           denomination: '1',
           couponRate: 0,
-          couponFrequencyMonths: 12, // Par défaut annuel
+          couponFrequency: 'none',
           issueDate: Date.now(),
           maturityDate: Date.now() + 365 * 24 * 3600 * 1000,
           nextCouponDate: Date.now(),
