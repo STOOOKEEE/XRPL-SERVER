@@ -1,8 +1,7 @@
 import { Client, Wallet, xrpToDrops } from 'xrpl';
 import { Bond } from '../models/Bond';
-import { BondHolder } from '../models/BondHolder';
-import { CouponPayment } from '../models/CouponPayment';
-import { Transaction } from '../models/Transaction';
+import { getBondInvestorModel } from '../models/BondInvestor';
+import { BondStatsService } from './BondStatsService';
 
 /**
  * Service de distribution des coupons aux détenteurs d'obligations
@@ -88,22 +87,12 @@ export class CouponDistributionService {
         throw new Error(`Obligation ${bondId} introuvable`);
       }
 
-      // Vérifie si un paiement est déjà planifié
-      const existingPayment = await CouponPayment.findOne({
-        bondId,
-        status: { $in: ['scheduled', 'processing'] }
-      });
-
-      if (existingPayment) {
-        console.log(`ℹ️  Un paiement est déjà planifié pour ${bond.tokenName}`);
-        return;
-      }
-
-      // Récupère tous les holders actuels
-      const holders = await BondHolder.find({ bondId });
+      // Récupère tous les investisseurs actuels
+      const InvestorModel = getBondInvestorModel(bondId);
+      const investors = await InvestorModel.find({});
       
-      if (holders.length === 0) {
-        console.log(`⚠️  Aucun holder pour ${bond.tokenName}, paiement ignoré`);
+      if (investors.length === 0) {
+        console.log(`⚠️  Aucun investisseur pour ${bond.tokenName}, paiement ignoré`);
         return;
       }
 
@@ -111,16 +100,15 @@ export class CouponDistributionService {
       const denominationNum = BigInt(bond.denomination);
       const couponPerToken = (denominationNum * BigInt(Math.floor(bond.couponRate * 100))) / BigInt(10000);
 
-      // Calcule les montants pour chaque holder
-      const recipients = holders.map(holder => {
-        const balanceNum = BigInt(holder.balance);
+      // Calcule les montants pour chaque investisseur
+      const recipients = investors.map(investor => {
+        const balanceNum = BigInt(investor.balance);
         const amount = (balanceNum * couponPerToken) / BigInt(1000000); // Ajuste selon la précision
         
         return {
-          holderAddress: holder.holderAddress,
-          balance: holder.balance,
-          amount: amount.toString(),
-          status: 'pending' as const
+          investorAddress: investor.investorAddress,
+          balance: investor.balance,
+          amount: amount.toString()
         };
       });
 
@@ -129,24 +117,7 @@ export class CouponDistributionService {
         BigInt(0)
       );
 
-      // Période du coupon
-      const periodEnd = bond.nextCouponDate;
-      const periodStart = this.subtractPeriod(periodEnd, bond.couponFrequency);
-
-      // Crée le paiement planifié
-      await CouponPayment.create({
-        bondId,
-        paymentDate: bond.nextCouponDate,
-        periodStart,
-        periodEnd,
-        totalAmount: totalAmount.toString(),
-        couponRate: bond.couponRate,
-        recipients,
-        status: 'scheduled',
-        executionTxHashes: []
-      });
-
-      console.log(`✅ Coupon planifié pour ${bond.tokenName} - ${recipients.length} destinataire(s) - Total: ${totalAmount.toString()}`);
+      console.log(`✅ Coupon prêt pour ${bond.tokenName} - ${recipients.length} destinataire(s) - Total: ${totalAmount.toString()}`);
     } catch (error) {
       console.error('❌ Erreur lors de la planification du coupon:', error);
       throw error;
@@ -178,26 +149,29 @@ export class CouponDistributionService {
   }
 
   /**
-   * Exécute les paiements de coupons dus
+   * Exécute les paiements de coupons dus pour une obligation
    */
-  async executeScheduledPayments(): Promise<void> {
+  async executeScheduledPayments(bondId: string): Promise<void> {
     try {
       await this.client.connect();
       console.log('✅ Connecté au XRPL pour les paiements');
 
-      const now = Date.now();
-      
-      // Trouve tous les paiements dus
-      const duePayments = await CouponPayment.find({
-        status: 'scheduled',
-        paymentDate: { $lte: now }
-      });
-
-      console.log(`💰 ${duePayments.length} paiement(s) à exécuter`);
-
-      for (const payment of duePayments) {
-        await this.executeCouponPayment((payment._id as any).toString());
+      const bond = await Bond.findOne({ bondId });
+      if (!bond) {
+        throw new Error(`Obligation ${bondId} introuvable`);
       }
+
+      // Vérifie si un coupon est dû
+      const now = Date.now();
+      if (bond.nextCouponDate > now) {
+        console.log('ℹ️  Aucun coupon dû pour le moment');
+        await this.client.disconnect();
+        return;
+      }
+
+      console.log(`💰 Exécution du paiement de coupon pour ${bond.tokenName}`);
+
+      await this.executeCouponPayment(bondId);
 
       await this.client.disconnect();
       console.log('✅ Paiements terminés');
@@ -209,48 +183,53 @@ export class CouponDistributionService {
   }
 
   /**
-   * Exécute un paiement de coupon spécifique
+   * Exécute un paiement de coupon pour une obligation
    */
-  async executeCouponPayment(paymentId: string): Promise<void> {
-    const payment = await CouponPayment.findById(paymentId);
-    if (!payment) {
-      throw new Error(`Paiement ${paymentId} introuvable`);
-    }
-
-    const bond = await Bond.findOne({ bondId: payment.bondId });
+  async executeCouponPayment(bondId: string): Promise<void> {
+    const bond = await Bond.findOne({ bondId });
     if (!bond) {
-      throw new Error(`Obligation ${payment.bondId} introuvable`);
+      throw new Error(`Obligation ${bondId} introuvable`);
     }
 
     console.log(`💸 Exécution du paiement pour ${bond.tokenName}...`);
 
     try {
-      // Marque le paiement comme en cours
-      payment.status = 'processing';
-      await payment.save();
+      const InvestorModel = getBondInvestorModel(bondId);
+      const investors = await InvestorModel.find({});
+
+      if (investors.length === 0) {
+        console.log('⚠️  Aucun investisseur, paiement ignoré');
+        return;
+      }
+
+      // Calcule le montant du coupon par token
+      const denominationNum = BigInt(bond.denomination);
+      const couponPerToken = (denominationNum * BigInt(Math.floor(bond.couponRate * 100))) / BigInt(10000);
 
       const txHashes: string[] = [];
+      let totalPaid = BigInt(0);
 
-      // Envoie les paiements à chaque holder
-      for (let i = 0; i < payment.recipients.length; i++) {
-        const recipient = payment.recipients[i];
-        
+      // Envoie les paiements à chaque investisseur
+      for (const investor of investors) {
         try {
-          console.log(`  → Paiement de ${recipient.amount} USDC à ${recipient.holderAddress}...`);
+          const balanceNum = BigInt(investor.balance);
+          const amount = (balanceNum * couponPerToken) / BigInt(1000000);
+          
+          console.log(`  → Paiement de ${amount} USDC à ${investor.investorAddress}...`);
 
           const prepared = await this.client.autofill({
             TransactionType: 'Payment',
             Account: this.issuerWallet.address,
-            Destination: recipient.holderAddress,
+            Destination: investor.investorAddress,
             Amount: {
-              currency: 'USD', // Code USDC
-              value: (BigInt(recipient.amount) / BigInt(1000000)).toString(), // Convertit en unités standards
-              issuer: bond.usdcIssuer || this.issuerWallet.address // Issuer du USDC
+              currency: 'USD',
+              value: (BigInt(amount) / BigInt(1000000)).toString(),
+              issuer: bond.usdcIssuer || this.issuerWallet.address
             },
             Memos: [{
               Memo: {
                 MemoType: Buffer.from('coupon_payment', 'utf8').toString('hex').toUpperCase(),
-                MemoData: Buffer.from(`Bond: ${bond.tokenName}, Period: ${new Date(payment.periodStart).toISOString()} - ${new Date(payment.periodEnd).toISOString()}`, 'utf8').toString('hex').toUpperCase()
+                MemoData: Buffer.from(`Bond: ${bond.tokenName}`, 'utf8').toString('hex').toUpperCase()
               }
             }]
           });
@@ -261,67 +240,44 @@ export class CouponDistributionService {
           if (result.result.meta && typeof result.result.meta === 'object' && 'TransactionResult' in result.result.meta) {
             const meta = result.result.meta as { TransactionResult: string };
             if (meta.TransactionResult === 'tesSUCCESS') {
-              payment.recipients[i].status = 'paid';
-              payment.recipients[i].txHash = result.result.hash;
               txHashes.push(result.result.hash);
+              totalPaid += amount;
 
-              // Enregistre la transaction
-              await Transaction.create({
-                bondId: bond.bondId,
+              // Enregistre la transaction dans l'historique de l'investisseur
+              investor.transactionHistory.push({
+                type: 'coupon',
+                amount: amount.toString(),
                 txHash: result.result.hash,
-                ledgerIndex: (result.result as any).ledger_index || 0,
-                fromAddress: this.issuerWallet.address,
-                toAddress: recipient.holderAddress,
-                amount: recipient.amount,
-                type: 'coupon_payment',
                 timestamp: Date.now(),
-                memo: `Coupon payment for ${bond.tokenName}`
+                fromAddress: this.issuerWallet.address,
+                toAddress: investor.investorAddress
               });
 
-              // Met à jour le holder
-              const holder = await BondHolder.findOne({
-                bondId: bond.bondId,
-                holderAddress: recipient.holderAddress
-              });
-              if (holder) {
-                holder.lastCouponPaid = Date.now();
-                holder.totalCouponsReceived = (
-                  BigInt(holder.totalCouponsReceived) + BigInt(recipient.amount)
-                ).toString();
-                await holder.save();
-              }
+              investor.totalCouponsReceived = (
+                BigInt(investor.totalCouponsReceived) + amount
+              ).toString();
+
+              await investor.save();
 
               console.log(`    ✅ Paiement réussi (${result.result.hash})`);
             } else {
-              payment.recipients[i].status = 'failed';
               console.error(`    ❌ Paiement échoué: ${meta.TransactionResult}`);
             }
           }
         } catch (error) {
-          payment.recipients[i].status = 'failed';
-          console.error(`    ❌ Erreur lors du paiement à ${recipient.holderAddress}:`, error);
+          console.error(`    ❌ Erreur lors du paiement à ${investor.investorAddress}:`, error);
         }
       }
 
-      // Met à jour le statut du paiement
-      payment.executionTxHashes = txHashes;
-      payment.status = payment.recipients.every(r => r.status === 'paid') ? 'completed' : 'failed';
-      await payment.save();
+      // Met à jour les stats de l'obligation
+      bond.stats.totalCouponsPaid = (
+        BigInt(bond.stats.totalCouponsPaid) + totalPaid
+      ).toString();
+      bond.nextCouponDate = this.calculateNextCouponDate(bond);
+      await bond.save();
 
-      // Met à jour la date du prochain coupon
-      if (payment.status === 'completed') {
-        bond.nextCouponDate = this.calculateNextCouponDate(bond);
-        await bond.save();
-        
-        // Planifie le prochain paiement
-        await this.scheduleCouponPayment(bond.bondId);
-      }
-
-      console.log(`✅ Paiement ${payment.status === 'completed' ? 'complété' : 'partiellement échoué'}`);
+      console.log(`✅ Paiement complété - Total: ${totalPaid.toString()}, Prochaine date: ${new Date(bond.nextCouponDate).toISOString()}`);
     } catch (error) {
-      payment.status = 'failed';
-      payment.errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      await payment.save();
       console.error('❌ Erreur lors du paiement:', error);
       throw error;
     }
@@ -336,8 +292,13 @@ export class CouponDistributionService {
     const check = async () => {
       try {
         console.log('🔍 Vérification des paiements dus...');
-        await this.executeScheduledPayments();
-        await this.scheduleAllCouponPayments();
+        
+        // Récupère toutes les obligations actives
+        const activeBonds = await Bond.find({ status: 'active' });
+        
+        for (const bond of activeBonds) {
+          await this.executeScheduledPayments(bond.bondId);
+        }
       } catch (error) {
         console.error('❌ Erreur dans le cron job:', error);
       }

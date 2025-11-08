@@ -4,10 +4,6 @@ import { getBondInvestorModel } from '../models/BondInvestor';
 import { BondStatsService } from './BondStatsService';
 import { BondEventNotifier } from './BondEventNotifier';
 
-// Imports des anciens modèles pour compatibilité temporaire
-import { BondHolder } from '../models/BondHolder';
-import { Transaction } from '../models/Transaction';
-
 /**
  * Service de monitoring des transactions XRPL pour les obligations
  * Écoute les transferts de tokens MPT et met à jour la base de données
@@ -537,25 +533,36 @@ export class BondTransactionMonitor {
         throw new Error(`Obligation ${bondId} introuvable`);
       }
 
-      console.log(`🔄 Synchronisation des holders pour ${bond.tokenName}...`);
+      console.log(`🔄 Synchronisation des investisseurs pour ${bond.tokenName}...`);
 
-      // Récupère tous les holders actuels depuis la DB
-      const dbHolders = await BondHolder.find({ bondId });
+      // Récupère tous les investisseurs actuels depuis la DB
+      const InvestorModel = getBondInvestorModel(bondId);
+      const dbInvestors = await InvestorModel.find({});
 
-      // Pour chaque holder, vérifie la balance réelle sur le ledger
-      for (const holder of dbHolders) {
+      // Pour chaque investisseur, vérifie la balance réelle sur le ledger
+      for (const investor of dbInvestors) {
         const realBalance = await this.getHolderBalanceFromLedger(
-          holder.holderAddress,
+          investor.investorAddress,
           bond.tokenCurrency
         );
 
-        if (realBalance !== holder.balance) {
-          console.log(`⚠️  Incohérence détectée pour ${holder.holderAddress}: DB=${holder.balance}, Ledger=${realBalance}`);
-          holder.balance = realBalance;
-          holder.lastUpdateDate = Date.now();
-          await holder.save();
+        if (realBalance !== investor.balance) {
+          console.log(`⚠️  Incohérence détectée pour ${investor.investorAddress}: DB=${investor.balance}, Ledger=${realBalance}`);
+          
+          const totalSupply = BigInt(bond.totalSupply);
+          const denomination = BigInt(bond.denomination);
+          const balance = BigInt(realBalance);
+          
+          investor.balance = realBalance;
+          investor.percentage = Number((balance * BigInt(10000)) / totalSupply) / 100;
+          investor.investedAmount = (balance * denomination).toString();
+          investor.lastUpdateDate = Date.now();
+          await investor.save();
         }
       }
+
+      // Met à jour les stats du bond
+      await BondStatsService.updateBondStats(bondId);
 
       console.log(`✅ Synchronisation terminée pour ${bond.tokenName}`);
     } catch (error) {

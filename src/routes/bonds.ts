@@ -3,11 +3,6 @@ import { Bond } from '../models/Bond';
 import { getBondInvestorModel } from '../models/BondInvestor';
 import { BondStatsService } from '../services/BondStatsService';
 
-// Anciens modèles pour compatibilité
-import { BondHolder } from '../models/BondHolder';
-import { CouponPayment } from '../models/CouponPayment';
-import { Transaction } from '../models/Transaction';
-
 const router = express.Router();
 
 /**
@@ -269,62 +264,58 @@ router.get('/:bondId/stats', async (req: Request, res: Response) => {
  * @deprecated Utiliser /api/bonds/:bondId/investors à la place
  */
 router.get('/:bondId/holders', async (req: Request, res: Response) => {
-  try {
-    const { bondId } = req.params;
-    const { minBalance } = req.query;
-
-    const filter: any = { bondId };
-    if (minBalance) {
-      filter.balance = { $gte: minBalance };
-    }
-
-    const holders = await BondHolder.find(filter)
-      .sort({ balance: -1 });
-
-    const totalBalance = holders.reduce(
-      (sum, h) => sum + BigInt(h.balance),
-      BigInt(0)
-    ).toString();
-
-    res.json({
-      success: true,
-      count: holders.length,
-      totalBalance,
-      data: holders
-    });
-  } catch (error) {
-    console.error('Error fetching holders:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch holders'
-    });
-  }
+  // Redirige vers la nouvelle route
+  return res.redirect(301, `/api/bonds/${req.params.bondId}/investors`);
 });
 
 /**
  * GET /api/bonds/:bondId/transactions
- * Liste les transactions d'une obligation
+ * Liste l'historique des transactions depuis les investisseurs
  */
 router.get('/:bondId/transactions', async (req: Request, res: Response) => {
   try {
     const { bondId } = req.params;
     const { type, limit = 100, offset = 0 } = req.query;
 
-    const filter: any = { bondId };
-    if (type) filter.type = type;
+    const InvestorModel = getBondInvestorModel(bondId);
+    const investors = await InvestorModel.find({});
 
-    const transactions = await Transaction.find(filter)
-      .sort({ timestamp: -1 })
-      .limit(Number(limit))
-      .skip(Number(offset));
+    // Collecte toutes les transactions de tous les investisseurs
+    let allTransactions: any[] = [];
+    for (const investor of investors) {
+      if (investor.transactionHistory) {
+        investor.transactionHistory.forEach(tx => {
+          allTransactions.push({
+            type: tx.type,
+            amount: tx.amount,
+            txHash: tx.txHash,
+            timestamp: tx.timestamp,
+            fromAddress: tx.fromAddress,
+            toAddress: tx.toAddress,
+            investorAddress: investor.investorAddress
+          });
+        });
+      }
+    }
 
-    const total = await Transaction.countDocuments(filter);
+    // Filtre par type si demandé
+    if (type) {
+      allTransactions = allTransactions.filter(tx => tx.type === type);
+    }
+
+    // Trie par timestamp décroissant
+    allTransactions.sort((a, b) => b.timestamp - a.timestamp);
+
+    // Pagination
+    const start = Number(offset);
+    const end = start + Number(limit);
+    const paginatedTransactions = allTransactions.slice(start, end);
 
     res.json({
       success: true,
-      count: transactions.length,
-      total,
-      data: transactions
+      count: paginatedTransactions.length,
+      total: allTransactions.length,
+      data: paginatedTransactions
     });
   } catch (error) {
     console.error('Error fetching transactions:', error);
@@ -337,23 +328,35 @@ router.get('/:bondId/transactions', async (req: Request, res: Response) => {
 
 /**
  * GET /api/bonds/:bondId/coupons
- * Liste les paiements de coupons
+ * Liste les paiements de coupons reçus par les investisseurs
  */
 router.get('/:bondId/coupons', async (req: Request, res: Response) => {
   try {
     const { bondId } = req.params;
-    const { status } = req.query;
 
-    const filter: any = { bondId };
-    if (status) filter.status = status;
+    const InvestorModel = getBondInvestorModel(bondId);
+    const investors = await InvestorModel.find({});
 
-    const coupons = await CouponPayment.find(filter)
-      .sort({ paymentDate: -1 });
+    // Collecte les coupons de tous les investisseurs
+    const couponPayments = investors
+      .filter(inv => inv.transactionHistory && inv.transactionHistory.length > 0)
+      .flatMap(inv => 
+        inv.transactionHistory
+          .filter(tx => tx.type === 'coupon')
+          .map(tx => ({
+            investorAddress: inv.investorAddress,
+            amount: tx.amount,
+            txHash: tx.txHash,
+            timestamp: tx.timestamp,
+            totalReceived: inv.totalCouponsReceived
+          }))
+      )
+      .sort((a, b) => b.timestamp - a.timestamp);
 
     res.json({
       success: true,
-      count: coupons.length,
-      data: coupons
+      count: couponPayments.length,
+      data: couponPayments
     });
   } catch (error) {
     console.error('Error fetching coupons:', error);
@@ -388,36 +391,46 @@ router.post('/:bondId/coupons/schedule', async (req: Request, res: Response) => 
 });
 
 /**
- * GET /api/holders/:address
+ * GET /api/holders/:address/bonds
  * Récupère les obligations détenues par une adresse
  */
 router.get('/holders/:address/bonds', async (req: Request, res: Response) => {
   try {
     const { address } = req.params;
 
-    const holdings = await BondHolder.find({ holderAddress: address });
+    // Récupère toutes les bonds
+    const allBonds = await Bond.find({});
     
-    // Enrichit avec les informations des bonds
-    const enrichedHoldings = await Promise.all(
-      holdings.map(async (holding) => {
-        const bond = await Bond.findOne({ bondId: holding.bondId });
-        return {
-          ...holding.toObject(),
-          bond: bond ? {
+    // Pour chaque bond, vérifie si l'adresse est investisseur
+    const holdings = [];
+    
+    for (const bond of allBonds) {
+      const InvestorModel = getBondInvestorModel(bond.bondId);
+      const investor = await InvestorModel.findOne({ investorAddress: address });
+      
+      if (investor) {
+        holdings.push({
+          bondId: bond.bondId,
+          holderAddress: address,
+          balance: investor.balance,
+          percentage: investor.percentage,
+          investedAmount: investor.investedAmount,
+          totalCouponsReceived: investor.totalCouponsReceived,
+          bond: {
             tokenName: bond.tokenName,
             couponRate: bond.couponRate,
             nextCouponDate: bond.nextCouponDate,
             maturityDate: bond.maturityDate,
             status: bond.status
-          } : null
-        };
-      })
-    );
+          }
+        });
+      }
+    }
 
     res.json({
       success: true,
-      count: enrichedHoldings.length,
-      data: enrichedHoldings
+      count: holdings.length,
+      data: holdings
     });
   } catch (error) {
     console.error('Error fetching holder bonds:', error);
