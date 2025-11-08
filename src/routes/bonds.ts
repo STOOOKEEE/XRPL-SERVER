@@ -206,6 +206,64 @@ router.get('/:bondId/investors', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/bonds/:bondId/investors
+ * Ajoute un investisseur test (pour développement uniquement)
+ */
+router.post('/:bondId/investors', async (req: Request, res: Response) => {
+  try {
+    const { bondId } = req.params;
+    const { investorAddress, balance, investedAmount } = req.body;
+
+    if (!investorAddress || !balance) {
+      return res.status(400).json({
+        success: false,
+        error: 'investorAddress and balance are required'
+      });
+    }
+
+    const bond = await Bond.findOne({ bondId });
+    if (!bond) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bond not found'
+      });
+    }
+
+    const InvestorModel = getBondInvestorModel(bondId);
+    
+    // Calcule le pourcentage
+    const balanceNum = BigInt(balance);
+    const totalSupplyNum = BigInt(bond.totalSupply);
+    const percentage = Number((balanceNum * BigInt(10000)) / totalSupplyNum) / 100;
+
+    // Crée l'investisseur
+    const investor = await InvestorModel.create({
+      investorAddress,
+      balance,
+      percentage,
+      investedAmount: investedAmount || balance,
+      transactionHistory: [],
+      totalCouponsReceived: '0'
+    });
+
+    // Met à jour les stats de l'obligation
+    await BondStatsService.updateBondStats(bondId);
+
+    res.json({
+      success: true,
+      message: 'Investor added successfully',
+      data: investor
+    });
+  } catch (error) {
+    console.error('Error adding investor:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to add investor'
+    });
+  }
+});
+
+/**
  * GET /api/bonds/:bondId/investors/:address
  * Récupère un investisseur spécifique
  */

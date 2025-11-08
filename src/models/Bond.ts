@@ -18,7 +18,7 @@ export interface IBond extends Document {
   
   // Conditions financières
   couponRate: number;                // Taux du coupon (ex: 5 pour 5%)
-  couponFrequency: 'monthly' | 'quarterly' | 'semi-annual' | 'annual' | 'none';
+  couponFrequencyMonths: number;     // Fréquence des coupons en mois (ex: 1=mensuel, 3=trimestriel, 6=semestriel)
   maturityDate: number;              // Date d'échéance (timestamp)
   issueDate: number;                 // Date d'émission (timestamp)
   nextCouponDate: number;            // Prochaine date de paiement de coupon
@@ -84,10 +84,11 @@ const BondSchema = new Schema<IBond>({
     min: 0,
     max: 100 
   },
-  couponFrequency: { 
-    type: String, 
-    enum: ['monthly', 'quarterly', 'semi-annual', 'annual', 'none'],
-    required: true 
+  couponFrequencyMonths: { 
+    type: Number, 
+    required: true,
+    min: 1,
+    max: 120 // Maximum 10 ans entre chaque coupon
   },
   maturityDate: { 
     type: Number, 

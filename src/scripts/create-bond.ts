@@ -29,7 +29,7 @@ async function createBond() {
       
       // Conditions
       couponRate: 5.0, // 5% annuel
-      couponFrequency: 'quarterly' as const,
+      couponFrequencyMonths: 3, // Tous les 3 mois (trimestriel)
       issueDate: Date.now(),
       maturityDate: new Date('2030-12-31').getTime(),
       nextCouponDate: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).getTime(), // Dans 90 jours

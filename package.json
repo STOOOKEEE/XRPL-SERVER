@@ -8,7 +8,9 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "migrate": "ts-node src/scripts/migrate-to-new-system.ts",
+    "migrate-frequency": "ts-node src/scripts/migrate-coupon-frequency.ts",
     "test-workflow": "ts-node src/scripts/test-complete-workflow.ts",
+    "demo-update": "ts-node src/scripts/demo-auto-update.ts",
     "create-bond": "ts-node src/scripts/create-bond.ts",
     "sync-holders": "ts-node src/scripts/sync-holders.ts",
     "execute-coupons": "ts-node src/scripts/execute-coupons.ts"

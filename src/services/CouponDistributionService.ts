@@ -27,33 +27,18 @@ export class CouponDistributionService {
 
     // Si la date est passée, calcule la prochaine
     while (nextDate <= currentDate) {
-      nextDate = this.addPeriod(nextDate, bond.couponFrequency);
+      nextDate = this.addMonths(nextDate, bond.couponFrequencyMonths);
     }
 
     return nextDate;
   }
 
   /**
-   * Ajoute une période à une date
+   * Ajoute un nombre de mois à une date
    */
-  private addPeriod(timestamp: number, frequency: string): number {
+  private addMonths(timestamp: number, months: number): number {
     const date = new Date(timestamp);
-    
-    switch (frequency) {
-      case 'monthly':
-        date.setMonth(date.getMonth() + 1);
-        break;
-      case 'quarterly':
-        date.setMonth(date.getMonth() + 3);
-        break;
-      case 'semi-annual':
-        date.setMonth(date.getMonth() + 6);
-        break;
-      case 'annual':
-        date.setFullYear(date.getFullYear() + 1);
-        break;
-    }
-    
+    date.setMonth(date.getMonth() + months);
     return date.getTime();
   }
 
