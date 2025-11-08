@@ -1,65 +1,39 @@
-{{
-
-  "name": "xrpl-bonds-server",  "name": "xrpl-bonds-backend",
-
-  "version": "1.0.0",  "version": "1.0.0",
-
-  "description": "Backend server for XRPL bonds management with MongoDB",  "description": "Backend server for XRPL bonds management with MongoDB",
-
-  "main": "dist/server.js",  "private": true,
-
-  "scripts": {  "scripts": {
-
-    "dev": "ts-node src/server.ts",    "dev": "ts-node src/server.ts",
-
-    "build": "tsc",    "start": "node dist/server.js",
-
-    "start": "node dist/server.js",    "build": "tsc",
-
-    "test-workflow": "ts-node src/scripts/test-complete-workflow.ts",    "create-mptoken": "ts-node ./mptoken/index.ts",
-
-    "create-bond": "ts-node src/scripts/create-bond.ts",    "create-wallet": "ts-node ./mptoken/create_and_fund_wallet.ts",
-
-    "sync-holders": "ts-node src/scripts/sync-holders.ts",    "create-bond": "ts-node src/scripts/create-bond.ts",
-
-    "execute-coupons": "ts-node src/scripts/execute-coupons.ts"    "sync-holders": "ts-node src/scripts/sync-holders.ts",
-
-  },    "execute-coupons": "ts-node src/scripts/execute-coupons.ts",
-
-  "keywords": ["xrpl", "bonds", "blockchain", "mongodb"],    "test-workflow": "ts-node src/scripts/test-complete-workflow.ts"
-
-  "author": "",  },
-
-  "license": "MIT",  "dependencies": {
-
-  "dependencies": {    "dotenv": "^17.2.3",
-
-    "dotenv": "^17.2.3",    "xrpl": "^4.4.3",
-
-    "xrpl": "^4.4.3",    "express": "^4.18.2",
-
-    "express": "^4.18.2",    "cors": "^2.8.5",
-
-    "cors": "^2.8.5",    "mongoose": "^8.0.0"
-
-    "mongoose": "^8.0.0"  },
-
-  },  "devDependencies": {
-
-  "devDependencies": {    "@types/node": "^24.10.0",
-
-    "@types/node": "^24.10.0",    "@types/express": "^4.17.21",
-
-    "@types/express": "^4.17.21",    "@types/cors": "^2.8.17",
-
-    "@types/cors": "^2.8.17",    "ts-node": "^10.9.2",
-
-    "ts-node": "^10.9.2",    "typescript": "^5.9.3"
-
-    "typescript": "^5.9.3"  }
-
-  },}
-
+{
+  "name": "xrpl-bonds-server",
+  "version": "1.0.0",
+  "description": "Backend server for XRPL bonds management with MongoDB",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "ts-node src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test-workflow": "ts-node src/scripts/test-complete-workflow.ts",
+    "create-bond": "ts-node src/scripts/create-bond.ts",
+    "sync-holders": "ts-node src/scripts/sync-holders.ts",
+    "execute-coupons": "ts-node src/scripts/execute-coupons.ts"
+  },
+  "keywords": [
+    "xrpl",
+    "bonds",
+    "blockchain",
+    "mongodb"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "xrpl": "^4.4.3",
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "mongoose": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@types/express": "^4.17.21",
+    "@types/cors": "^2.8.17",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
   "engines": {
     "node": ">=18.0.0",
     "npm": ">=9.0.0"
