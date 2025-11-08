@@ -18,7 +18,7 @@ export interface IBond extends Document {
   
   // Conditions financières
   couponRate: number;                // Taux du coupon (ex: 5 pour 5%)
-  couponFrequencyMonths: number;     // Fréquence des coupons en mois (ex: 1=mensuel, 3=trimestriel, 6=semestriel)
+  couponFrequency: 'monthly' | 'quarterly' | 'semi-annual' | 'annual' | 'none';
   maturityDate: number;              // Date d'échéance (timestamp)
   issueDate: number;                 // Date d'émission (timestamp)
   nextCouponDate: number;            // Prochaine date de paiement de coupon
@@ -84,11 +84,10 @@ const BondSchema = new Schema<IBond>({
     min: 0,
     max: 100 
   },
-  couponFrequencyMonths: { 
-    type: Number, 
-    required: true,
-    min: 1,
-    max: 120 // Maximum 10 ans entre chaque coupon
+  couponFrequency: { 
+    type: String, 
+    enum: ['monthly', 'quarterly', 'semi-annual', 'annual', 'none'],
+    required: true 
   },
   maturityDate: { 
     type: Number, 
@@ -129,5 +128,10 @@ const BondSchema = new Schema<IBond>({
 // Index composés pour requêtes fréquentes
 BondSchema.index({ status: 1, nextCouponDate: 1 });
 BondSchema.index({ issuerAddress: 1, status: 1 });
+
+// Supprimer le modèle existant s'il existe (pour éviter les conflits de schéma)
+if (mongoose.models.Bond) {
+  delete mongoose.models.Bond;
+}
 
 export const Bond = mongoose.model<IBond>('Bond', BondSchema);

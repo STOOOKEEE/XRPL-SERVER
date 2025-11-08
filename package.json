@@ -9,6 +9,8 @@
     "start": "node dist/server.js",
     "migrate": "ts-node src/scripts/migrate-to-new-system.ts",
     "test-workflow": "ts-node src/scripts/test-complete-workflow.ts",
+    "test-multiple": "ts-node src/scripts/test-multiple-bonds.ts",
+    "test-auto-collection": "ts-node src/scripts/test-auto-collection.ts",
     "demo-update": "ts-node src/scripts/demo-auto-update.ts",
     "create-bond": "ts-node src/scripts/create-bond.ts",
     "sync-holders": "ts-node src/scripts/sync-holders.ts",
