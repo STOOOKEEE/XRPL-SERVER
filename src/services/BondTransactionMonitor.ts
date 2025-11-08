@@ -45,8 +45,18 @@ export class BondTransactionMonitor {
         }
       });
 
-      // Subscribe aux transactions de tous les bonds actifs
-      await this.subscribeToActiveBonds();
+        // Subscribe aux transactions de tous les bonds actifs
+        await this.subscribeToActiveBonds();
+        // S'abonner aussi au flux global de transactions pour détecter
+        // les transferts entre holders (utile si le transfer n'implique pas
+        // directement l'adresse de l'émetteur)
+        try {
+          await this.client.request({ command: 'subscribe', streams: ['transactions'] });
+          console.log('✅ Abonné au stream global de transactions');
+        } catch (e) {
+          // Ne bloque pas le monitoring si l'abonnement échoue
+          console.warn('⚠️ Impossible de s\'abonner au stream global de transactions:', e.message || e);
+        }
 
       console.log('👀 Monitoring des transactions démarré');
     } catch (error) {
@@ -220,17 +230,89 @@ export class BondTransactionMonitor {
    * Traite l'émission d'un nouveau token
    */
   private async handleTokenIssuance(tx: any, txData: any): Promise<void> {
-    console.log('🆕 Nouvelle émission de token détectée:', tx);
-    // Logique pour créer automatiquement un bond si nécessaire
-    // Ou simplement logger pour traitement manuel
+    try {
+      console.log('🆕 Nouvelle émission de token détectée:', tx);
+
+      // Certaines transactions d'émission fournissent l'ID mpt et le total
+      const mptId = tx.MPToken?.mpt_id || tx.Amount?.mpt_id;
+      const totalSupply = tx.MPToken?.total_amount || tx.Amount?.value || undefined;
+
+      if (!mptId) return;
+
+      // Cherche un bond existant
+      let bond = await Bond.findOne({ tokenCurrency: mptId });
+
+      if (!bond) {
+        // Crée un bond basique si absent (données minimales)
+        bond = await Bond.create({
+          bondId: `AUTO-${mptId}-${Date.now()}`,
+          issuerAddress: tx.Account || tx.Issuer || 'unknown',
+          issuerName: 'Auto Issuer',
+          tokenCurrency: mptId,
+          tokenName: `Token ${mptId}`,
+          totalSupply: totalSupply ? String(totalSupply) : '0',
+          denomination: '1',
+          couponRate: 0,
+          couponFrequency: 'none',
+          issueDate: Date.now(),
+          maturityDate: Date.now() + 365 * 24 * 3600 * 1000,
+          nextCouponDate: Date.now(),
+          status: 'active',
+          description: 'Auto-created bond from MPTokenIssuance'
+        });
+
+        console.log(`✅ Bond créé automatiquement pour le token ${mptId}`);
+      } else if (totalSupply) {
+        // Met à jour le totalSupply si fourni
+        bond.totalSupply = String(totalSupply);
+        await bond.save();
+        console.log(`🔄 Bond ${bond.bondId} mis à jour totalSupply=${bond.totalSupply}`);
+      }
+    } catch (error) {
+      console.error('❌ Erreur lors du traitement de l\'émission de token:', error);
+    }
   }
 
   /**
    * Traite l'autorisation d'un holder
    */
   private async handleTokenAuthorize(tx: any, txData: any): Promise<void> {
-    console.log('✅ Autorisation de holder détectée:', tx);
-    // Logique pour suivre les autorisations
+    try {
+      console.log('✅ Autorisation de holder détectée:', tx);
+
+      // Extrait les informations possibles
+      const mptId = tx.MPToken?.mpt_id || tx.Amount?.mpt_id;
+      const holder = tx.Target || tx.Account || tx.Destination;
+
+      if (!mptId || !holder) return;
+
+      const bond = await Bond.findOne({ tokenCurrency: mptId });
+      if (!bond) return;
+
+      // Marque le holder comme autorisé si nécessaire (champ optionnel)
+      const existing = await BondHolder.findOne({ bondId: bond.bondId, holderAddress: holder });
+      if (existing) {
+        // On peut ajouter un flag 'authorized' si voulu
+        (existing as any).authorized = true;
+        existing.lastUpdateDate = Date.now();
+        await existing.save();
+        console.log(`🔐 Holder ${holder} marqué comme autorisé pour ${bond.bondId}`);
+      } else {
+        await BondHolder.create({
+          bondId: bond.bondId,
+          holderAddress: holder,
+          balance: '0',
+          firstAcquisitionDate: Date.now(),
+          lastUpdateDate: Date.now(),
+          totalCouponsReceived: '0',
+          // @ts-ignore optional
+          authorized: true
+        });
+        console.log(`🔐 Nouveau holder ${holder} créé et autorisé pour ${bond.bondId}`);
+      }
+    } catch (error) {
+      console.error('❌ Erreur lors du traitement de l\'autorisation de token:', error);
+    }
   }
 
   /**
