@@ -1,8 +1,12 @@
 import { Client, Transaction as XRPLTransaction } from 'xrpl';
 import { Bond } from '../models/Bond';
+import { getBondInvestorModel } from '../models/BondInvestor';
+import { BondStatsService } from './BondStatsService';
+import { BondEventNotifier } from './BondEventNotifier';
+
+// Imports des anciens modèles pour compatibilité temporaire
 import { BondHolder } from '../models/BondHolder';
 import { Transaction } from '../models/Transaction';
-import { BondEventNotifier } from './BondEventNotifier';
 
 /**
  * Service de monitoring des transactions XRPL pour les obligations
@@ -236,22 +240,10 @@ export class BondTransactionMonitor {
 
       console.log(`📊 Transfert détecté pour ${bond.tokenName}: ${amount} tokens de ${fromAddress} vers ${toAddress}`);
 
-      // Enregistre la transaction
-      await Transaction.create({
-        bondId: bond.bondId,
-        txHash: txData.transaction.hash,
-        ledgerIndex: txData.ledger_index,
-        fromAddress,
-        toAddress,
-        amount,
-        type: 'transfer',
-        timestamp: this.rippleTimeToUnix(tx.date),
-        memo: tx.Memos?.[0]?.Memo?.MemoData ? 
-          Buffer.from(tx.Memos[0].Memo.MemoData, 'hex').toString('utf8') : undefined
-      });
+      const txHash = txData.transaction?.hash || txData.hash;
 
-      // Met à jour les balances des holders
-      await this.updateHolderBalances(bond.bondId, fromAddress, toAddress, amount, txData.ledger_index);
+      // Met à jour les balances des investisseurs (nouveau système)
+      await this.updateHolderBalances(bond.bondId, fromAddress, toAddress, amount, txHash);
 
     } catch (error) {
       console.error('❌ Erreur lors du traitement du paiement:', error);
@@ -290,7 +282,13 @@ export class BondTransactionMonitor {
           maturityDate: Date.now() + 365 * 24 * 3600 * 1000,
           nextCouponDate: Date.now(),
           status: 'active',
-          description: 'Auto-created bond from MPTokenIssuance'
+          description: 'Auto-created bond from MPTokenIssuance',
+          stats: {
+            totalInvestors: 0,
+            totalInvested: '0',
+            percentageDistributed: 0,
+            totalCouponsPaid: '0'
+          }
         });
 
         console.log(`✅ Bond créé automatiquement pour le token ${mptId}`);
@@ -321,26 +319,32 @@ export class BondTransactionMonitor {
       const bond = await Bond.findOne({ tokenCurrency: mptId });
       if (!bond) return;
 
+      // Récupère le modèle d'investisseurs pour cette obligation
+      const InvestorModel = getBondInvestorModel(bond.bondId);
+
       // Marque le holder comme autorisé si nécessaire (champ optionnel)
-      const existing = await BondHolder.findOne({ bondId: bond.bondId, holderAddress: holder });
+      const existing = await InvestorModel.findOne({ investorAddress: holder });
       if (existing) {
         // On peut ajouter un flag 'authorized' si voulu
         (existing as any).authorized = true;
         existing.lastUpdateDate = Date.now();
         await existing.save();
-        console.log(`🔐 Holder ${holder} marqué comme autorisé pour ${bond.bondId}`);
+        console.log(`🔐 Investisseur ${holder} marqué comme autorisé pour ${bond.bondId}`);
       } else {
-        await BondHolder.create({
-          bondId: bond.bondId,
-          holderAddress: holder,
+        const timestamp = Date.now();
+        await InvestorModel.create({
+          investorAddress: holder,
           balance: '0',
-          firstAcquisitionDate: Date.now(),
-          lastUpdateDate: Date.now(),
+          percentage: 0,
+          investedAmount: '0',
+          firstInvestmentDate: timestamp,
+          lastUpdateDate: timestamp,
+          transactionHistory: [],
           totalCouponsReceived: '0',
           // @ts-ignore optional
           authorized: true
         });
-        console.log(`🔐 Nouveau holder ${holder} créé et autorisé pour ${bond.bondId}`);
+        console.log(`🔐 Nouvel investisseur ${holder} créé et autorisé pour ${bond.bondId}`);
       }
     } catch (error) {
       console.error('❌ Erreur lors du traitement de l\'autorisation de token:', error);
@@ -348,29 +352,44 @@ export class BondTransactionMonitor {
   }
 
   /**
-   * Met à jour les balances des détenteurs
+   * Met à jour les balances des investisseurs avec le nouveau système
    */
   private async updateHolderBalances(
     bondId: string,
     fromAddress: string,
     toAddress: string,
     amount: string,
-    ledgerIndex: number
+    txHash: string
   ): Promise<void> {
     const timestamp = Date.now();
     const amountNum = BigInt(amount);
 
-    // Récupère le bond pour les notifications
+    // Récupère le bond
     const bond = await Bond.findOne({ bondId });
     if (!bond) return;
 
+    // Récupère le modèle d'investisseurs pour cette obligation
+    const InvestorModel = getBondInvestorModel(bondId);
+    const denomination = BigInt(bond.denomination);
+    const totalSupply = BigInt(bond.totalSupply);
+
     // Met à jour l'expéditeur (réduit sa balance)
-    const sender = await BondHolder.findOne({ bondId, holderAddress: fromAddress });
+    const sender = await InvestorModel.findOne({ investorAddress: fromAddress });
     if (sender) {
       const newBalance = BigInt(sender.balance) - amountNum;
+      
+      // Ajoute la transaction à l'historique
+      sender.transactionHistory.push({
+        type: 'transfer_out',
+        amount,
+        txHash,
+        timestamp,
+        toAddress
+      });
+      
       if (newBalance <= BigInt(0)) {
-        // Supprime le holder s'il n'a plus de tokens
-        await BondHolder.deleteOne({ _id: sender._id });
+        // Supprime l'investisseur s'il n'a plus de tokens
+        await InvestorModel.deleteOne({ _id: sender._id });
         console.log(`🗑️  ${fromAddress} n'a plus de tokens ${bondId}`);
         
         // Notification de sortie
@@ -382,46 +401,69 @@ export class BondTransactionMonitor {
         });
       } else {
         sender.balance = newBalance.toString();
+        sender.percentage = Number((newBalance * BigInt(10000)) / totalSupply) / 100;
+        sender.investedAmount = (newBalance * denomination).toString();
         sender.lastUpdateDate = timestamp;
         await sender.save();
-        console.log(`📉 ${fromAddress} balance: ${sender.balance}`);
+        console.log(`📉 ${fromAddress} balance: ${sender.balance} (${sender.percentage}%)`);
       }
     }
 
     // Met à jour le destinataire (augmente sa balance)
-    const recipient = await BondHolder.findOne({ bondId, holderAddress: toAddress });
+    let recipient = await InvestorModel.findOne({ investorAddress: toAddress });
     if (recipient) {
       const newBalance = BigInt(recipient.balance) + amountNum;
       recipient.balance = newBalance.toString();
+      recipient.percentage = Number((newBalance * BigInt(10000)) / totalSupply) / 100;
+      recipient.investedAmount = (newBalance * denomination).toString();
       recipient.lastUpdateDate = timestamp;
+      
+      // Ajoute la transaction à l'historique
+      recipient.transactionHistory.push({
+        type: 'transfer_in',
+        amount,
+        txHash,
+        timestamp,
+        fromAddress
+      });
+      
       await recipient.save();
-      console.log(`📈 ${toAddress} balance: ${recipient.balance}`);
+      console.log(`📈 ${toAddress} balance: ${recipient.balance} (${recipient.percentage}%)`);
       
       // Vérifie si c'est une position importante (> 10%)
-      const totalSupply = BigInt(bond.totalSupply);
-      const percentage = Number((newBalance * BigInt(10000)) / totalSupply) / 100;
-      
-      if (percentage > 10) {
+      if (recipient.percentage > 10) {
         await this.notifier.notifyLargeBalance({
           bondId,
           bondName: bond.tokenName,
           holderAddress: toAddress,
           balance: recipient.balance,
-          percentageOfTotal: percentage,
+          percentageOfTotal: recipient.percentage,
           timestamp
         });
       }
     } else {
-      // Crée un nouveau holder
-      await BondHolder.create({
-        bondId,
-        holderAddress: toAddress,
+      // Crée un nouvel investisseur
+      const percentage = Number((amountNum * BigInt(10000)) / totalSupply) / 100;
+      const investedAmount = (amountNum * denomination).toString();
+      
+      recipient = await InvestorModel.create({
+        investorAddress: toAddress,
         balance: amount,
-        firstAcquisitionDate: timestamp,
+        percentage,
+        investedAmount,
+        firstInvestmentDate: timestamp,
         lastUpdateDate: timestamp,
+        transactionHistory: [{
+          type: 'transfer_in',
+          amount,
+          txHash,
+          timestamp,
+          fromAddress
+        }],
         totalCouponsReceived: '0'
       });
-      console.log(`🆕 Nouveau holder créé: ${toAddress} avec balance: ${amount}`);
+      
+      console.log(`🆕 Nouvel investisseur créé: ${toAddress} avec ${amount} tokens (${percentage}%)`);
       
       // Notification nouveau holder
       await this.notifier.notifyNewHolder({
@@ -440,9 +482,12 @@ export class BondTransactionMonitor {
       fromAddress,
       toAddress,
       amount,
-      txHash: '', // Sera rempli par le caller
+      txHash,
       timestamp
     });
+
+    // Met à jour les statistiques du bond
+    await BondStatsService.updateBondStats(bondId);
   }
 
   /**

@@ -1,12 +1,8 @@
 // Export tous les modèles
-export { Bond } from './Bond';
-export type { IBond } from './Bond';
+export { Bond, IBond } from './Bond';
+export { getBondInvestorModel, deleteBondInvestorCollection, IBondInvestor } from './BondInvestor';
 
-export { BondHolder } from './BondHolder';
-export type { IBondHolder } from './BondHolder';
-
-export { Transaction } from './Transaction';
-export type { ITransaction } from './Transaction';
-
-export { CouponPayment } from './CouponPayment';
-export type { ICouponPayment } from './CouponPayment';
+// Anciens modèles conservés pour compatibilité mais dépréciés
+export { BondHolder, IBondHolder } from './BondHolder';
+export { Transaction, ITransaction } from './Transaction';
+export { CouponPayment, ICouponPayment } from './CouponPayment';
